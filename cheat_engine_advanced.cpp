@@ -5,6 +5,7 @@
 #include <thread>
 #include <mutex>
 #include <string>
+#include <cstdlib>
 
 std::mutex print_mutex;
 
@@ -57,7 +58,6 @@ void ScanMemoryRange(HANDLE hProcess, SIZE_T startAddr, SIZE_T endAddr, int valu
                         }
                     }
                     catch (...) {
-                        // ข้ามตำแหน่งที่มีปัญหา
                         continue;
                     }
                 }
@@ -95,7 +95,8 @@ int main() {
     int valueToFind;
     std::cout << "Enter the value to find (e.g., 30): ";
     std::cin >> valueToFind;
-    std::cin.ignore(); // ล้าง buffer เพื่อป้องกันปัญหาการอ่าน input
+    std::cin.clear(); // ล้างสถานะ error
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // ล้าง buffer
 
     // สแกนหน่วยความจำ
     std::vector<SIZE_T> foundAddresses;
@@ -128,9 +129,12 @@ int main() {
 
     // รับค่าใหม่หลังเปลี่ยนแปลง
     int newValue;
+    std::cout << "\nChange the value in the program (e.g., from 30 to 35), then press Enter to continue..." << std::endl;
+    std::cin.get(); // รอให้ผู้ใช้กด Enter
     std::cout << "Enter the new value in game (e.g., 35): ";
     std::cin >> newValue;
-    std::cin.ignore(); // ล้าง buffer เพื่อป้องกันปัญหาการอ่าน input
+    std::cin.clear();
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
     // กรองค่า
     std::vector<SIZE_T> filteredAddresses;
@@ -163,9 +167,10 @@ int main() {
 
     // แก้ไขค่า
     int targetValue;
-    std::cout << "Enter the value to set (e.g., 100): ";
+    std::cout << "\nEnter the value to set (e.g., 100): ";
     std::cin >> targetValue;
-    std::cin.ignore(); // ล้าง buffer เพื่อป้องกันปัญหาการอ่าน input
+    std::cin.clear();
+    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
 
     for (SIZE_T address : filteredAddresses) {
         SIZE_T bytesWritten;
