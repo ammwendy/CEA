@@ -7,6 +7,16 @@
 #include <string>
 #include <cstdlib>
 
+// ฟังก์ชันแปลง std::wstring เป็น std::string โดยใช้ WideCharToMultiByte
+std::string WStringToString(const std::wstring& wstr) {
+    if (wstr.empty()) return std::string();
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), NULL, 0, NULL, NULL);
+    if (size_needed == 0) return std::string();
+    std::string strTo(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
+    return strTo;
+}
+
 std::mutex print_mutex;
 
 // ฟังก์ชันหา PID จากชื่อโปรเซส
@@ -18,6 +28,7 @@ DWORD FindProcessId(const std::wstring& processName) {
     }
 
     DWORD processCount = bytesReturned / sizeof(DWORD);
+    bool found = false;
     for (DWORD i = 0; i < processCount; i++) {
         if (processIds[i] == 0) continue;
         HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processIds[i]);
@@ -25,12 +36,16 @@ DWORD FindProcessId(const std::wstring& processName) {
             WCHAR szProcessName[MAX_PATH] = L"";
             if (GetModuleBaseNameW(hProcess, NULL, szProcessName, sizeof(szProcessName) / sizeof(WCHAR))) {
                 if (_wcsicmp(szProcessName, processName.c_str()) == 0) {
+                    found = true;
                     CloseHandle(hProcess);
                     return processIds[i];
                 }
             }
             CloseHandle(hProcess);
         }
+    }
+    if (!found) {
+        std::cout << "Process '" << WStringToString(processName) << "' not found. Make sure it is running!" << std::endl;
     }
     return 0;
 }
@@ -43,7 +58,6 @@ void ScanMemoryRange(HANDLE hProcess, SIZE_T startAddr, SIZE_T endAddr, int valu
     while (address < endAddr) {
         try {
             if (!VirtualQueryEx(hProcess, (LPCVOID)address, &mbi, sizeof(mbi))) {
-                std::cout << "VirtualQueryEx failed at address: 0x" << std::hex << address << std::dec << ". Error code: " << GetLastError() << std::endl;
                 address += 0x1000;
                 continue;
             }
@@ -70,15 +84,11 @@ void ScanMemoryRange(HANDLE hProcess, SIZE_T startAddr, SIZE_T endAddr, int valu
                         }
                     }
                 }
-                else {
-                    std::cout << "ReadProcessMemory failed at address: 0x" << std::hex << address << std::dec << ". Error code: " << GetLastError() << std::endl;
-                }
                 delete[] buffer;
             }
             address += mbi.RegionSize;
         }
         catch (...) {
-            std::cout << "Exception occurred at address: 0x" << std::hex << address << std::dec << std::endl;
             address += 0x1000;
         }
     }
@@ -92,7 +102,7 @@ int main() {
     // หา PID ของโปรเซส
     DWORD pid = FindProcessId(processName);
     if (pid == 0) {
-        std::cout << "Process not found!" << std::endl;
+        std::cout << "Please ensure the process is running and try again." << std::endl;
         system("pause");
         return 1;
     }
@@ -109,7 +119,7 @@ int main() {
 
     // รับค่าที่ต้องการหา
     int valueToFind;
-    std::cout << "Enter the value to find (e.g., 95): ";
+    std::cout << "Enter the value to find (e.g., 1): ";
     std::cin >> valueToFind;
     std::cin.clear();
     std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
@@ -118,9 +128,8 @@ int main() {
     std::vector<SIZE_T> foundAddresses;
     SYSTEM_INFO sysInfo;
     GetSystemInfo(&sysInfo);
-    // จำกัดช่วงการสแกนให้แคบลงเพื่อให้เร็วขึ้น
-    SIZE_T startAddr = 0x1000000; // เริ่มที่ 16MB
-    SIZE_T endAddr = 0x7FFFFFFF;  // สิ้นสุดที่ 2GB
+    SIZE_T startAddr = (SIZE_T)sysInfo.lpMinimumApplicationAddress;
+    SIZE_T endAddr = (SIZE_T)sysInfo.lpMaximumApplicationAddress;
 
     std::cout << "Starting memory scan... This may take a while." << std::endl;
 
@@ -150,7 +159,7 @@ int main() {
 
     // รับค่าใหม่หลังเปลี่ยนแปลง
     int newValue;
-    std::cout << "\nChange the value in the program (e.g., from 95 to 100), then press Enter to continue..." << std::endl;
+    std::cout << "\nChange the value in the program (e.g., from 1 to 100), then press Enter to continue..." << std::endl;
     std::cin.get();
     std::cout << "Enter the new value in game (e.g., 100): ";
     std::cin >> newValue;
@@ -160,6 +169,18 @@ int main() {
     // กรองค่า
     std::vector<SIZE_T> filteredAddresses;
     for (SIZE_T address : foundAddresses) {
+        // ตรวจสอบว่าที่อยู่นั้นยังใช้งานได้หรือไม่
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQueryEx(hProcess, (LPCVOID)address, &mbi, sizeof(mbi))) {
+            std::cout << "VirtualQueryEx failed at address: 0x" << std::hex << address << std::dec << ". Error code: " << GetLastError() << std::endl;
+            continue;
+        }
+
+        if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD)) {
+            std::cout << "Address 0x" << std::hex << address << std::dec << " is no longer accessible." << std::endl;
+            continue;
+        }
+
         int value;
         SIZE_T bytesRead;
         try {

@@ -1,6 +1,6 @@
 #include <iostream>
 int main() {
-    volatile int testValue = 95; // ใช้ volatile เพื่อป้องกัน optimization
+    static volatile int testValue = 1; // ใช้ static เพื่อให้ที่อยู่นิ่ง
     std::cout << "Test value: " << testValue << std::endl;
     std::cout << "Address of testValue: " << &testValue << std::endl;
     std::cout << "Press Enter to change value to 100..." << std::endl;
