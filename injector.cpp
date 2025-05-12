@@ -2,8 +2,9 @@
 #include <iostream>
 #include <string>
 #include <fstream>
-#include <vector> // เพิ่ม header สำหรับ std::vector
+#include <vector>
 #include <tlhelp32.h>
+#include <psapi.h>
 
 // หา thread แรกของโปรเซส
 DWORD GetProcessThreadId(DWORD pid) {
@@ -31,11 +32,12 @@ DWORD GetProcessThreadId(DWORD pid) {
     return 0;
 }
 
-LPVOID ManualMapDll(HANDLE hProcess, const char* dllPath, LPVOID& entryPoint) {
+// Manual Mapping เพื่อฉีด DLL
+bool ManualMapDll(HANDLE hProcess, const char* dllPath, LPVOID& entryPoint) {
     std::ifstream file(dllPath, std::ios::binary | std::ios::ate);
     if (!file) {
         std::cout << "Failed to open DLL file!" << std::endl;
-        return nullptr;
+        return false;
     }
 
     size_t fileSize = file.tellg();
@@ -47,25 +49,25 @@ LPVOID ManualMapDll(HANDLE hProcess, const char* dllPath, LPVOID& entryPoint) {
     IMAGE_DOS_HEADER* dosHeader = (IMAGE_DOS_HEADER*)dllData.data();
     if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
         std::cout << "Invalid DOS header!" << std::endl;
-        return nullptr;
+        return false;
     }
 
     IMAGE_NT_HEADERS* ntHeader = (IMAGE_NT_HEADERS*)(dllData.data() + dosHeader->e_lfanew);
     if (ntHeader->Signature != IMAGE_NT_SIGNATURE) {
         std::cout << "Invalid NT header!" << std::endl;
-        return nullptr;
+        return false;
     }
 
     LPVOID imageBase = VirtualAllocEx(hProcess, NULL, ntHeader->OptionalHeader.SizeOfImage, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
     if (!imageBase) {
         std::cout << "Failed to allocate memory in target process! Error code: " << GetLastError() << std::endl;
-        return nullptr;
+        return false;
     }
 
     if (!WriteProcessMemory(hProcess, imageBase, dllData.data(), ntHeader->OptionalHeader.SizeOfHeaders, NULL)) {
         std::cout << "Failed to write PE header! Error code: " << GetLastError() << std::endl;
         VirtualFreeEx(hProcess, imageBase, 0, MEM_RELEASE);
-        return nullptr;
+        return false;
     }
 
     IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(ntHeader);
@@ -74,14 +76,14 @@ LPVOID ManualMapDll(HANDLE hProcess, const char* dllPath, LPVOID& entryPoint) {
             if (!WriteProcessMemory(hProcess, (LPVOID)((size_t)imageBase + section[i].VirtualAddress), dllData.data() + section[i].PointerToRawData, section[i].SizeOfRawData, NULL)) {
                 std::cout << "Failed to write section " << i << "! Error code: " << GetLastError() << std::endl;
                 VirtualFreeEx(hProcess, imageBase, 0, MEM_RELEASE);
-                return nullptr;
+                return false;
             }
         }
     }
 
     entryPoint = (LPVOID)((size_t)imageBase + ntHeader->OptionalHeader.AddressOfEntryPoint);
     std::cout << "DLL manually mapped at address: 0x" << std::hex << imageBase << std::dec << std::endl;
-    return imageBase; // ส่ง imageBase กลับ
+    return true;
 }
 
 int main() {
@@ -98,18 +100,16 @@ int main() {
 
     const char* dllPath = "D:\\CheatEngineAdvanced\\cheat_dll.dll";
     LPVOID entryPoint = nullptr;
-    LPVOID imageBase = ManualMapDll(hProcess, dllPath, entryPoint);
-    if (!imageBase) {
+    if (!ManualMapDll(hProcess, dllPath, entryPoint)) {
         CloseHandle(hProcess);
         system("pause");
         return 1;
     }
 
-    // Thread Hijacking
+    // QueueUserAPC เพื่อเรียก DllMain
     DWORD threadId = GetProcessThreadId(pid);
     if (!threadId) {
         std::cout << "Failed to find thread in target process!" << std::endl;
-        VirtualFreeEx(hProcess, imageBase, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         system("pause");
         return 1;
@@ -118,25 +118,23 @@ int main() {
     HANDLE hThread = OpenThread(THREAD_ALL_ACCESS, FALSE, threadId);
     if (!hThread) {
         std::cout << "Failed to open thread! Error code: " << GetLastError() << std::endl;
-        VirtualFreeEx(hProcess, imageBase, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         system("pause");
         return 1;
     }
 
-    SuspendThread(hThread);
-    CONTEXT ctx = { 0 };
-    ctx.ContextFlags = CONTEXT_FULL;
-    GetThreadContext(hThread, &ctx);
-
-    ctx.Rip = (DWORD64)entryPoint; // เปลี่ยน RIP เพื่อเรียก DllMain
-    SetThreadContext(hThread, &ctx);
-    ResumeThread(hThread);
+    if (!QueueUserAPC((PAPCFUNC)entryPoint, hThread, 0)) {
+        std::cout << "Failed to queue APC! Error code: " << GetLastError() << std::endl;
+        CloseHandle(hThread);
+        CloseHandle(hProcess);
+        system("pause");
+        return 1;
+    }
 
     CloseHandle(hThread);
     CloseHandle(hProcess);
 
-    std::cout << "DLL injected successfully using Thread Hijacking!" << std::endl;
+    std::cout << "DLL injected successfully using QueueUserAPC!" << std::endl;
     system("pause");
     return 0;
 }
